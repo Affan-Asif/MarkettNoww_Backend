@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Competitor Comparison</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 1.5rem;
+      background: #0f0f12;
+      color: #e4e4e7;
+      min-height: 100vh;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle { color: #71717a; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      align-items: flex-end;
+      margin-bottom: 2rem;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+    label { font-size: 0.8rem; color: #a1a1aa; }
+    input {
+      width: 220px;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      background: #18181b;
+      color: #fff;
+      font-size: 0.95rem;
+    }
+    input::placeholder { color: #52525b; }
+    input:focus {
+      outline: none;
+      border-color: #6366f1;
+      box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+    }
+    button {
+      padding: 0.6rem 1.25rem;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: 500;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover { background: #4f46e5; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error {
+      background: #451a1a;
+      color: #fca5a5;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+    .results { display: none; }
+    .results.visible { display: block; }
+    section {
+      margin-bottom: 2rem;
+      padding: 1.25rem;
+      background: #18181b;
+      border-radius: 12px;
+      border: 1px solid #27272a;
+    }
+    section h2 {
+      font-size: 1.1rem;
+      margin: 0 0 1rem 0;
+      color: #a1a1aa;
+      font-weight: 500;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid #27272a;
+    }
+    th { color: #71717a; font-weight: 500; }
+    .pos { text-align: center; }
+    .pos.missing { color: #52525b; }
+    .chart-wrap { height: 280px; margin-top: 0.5rem; }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 600px) { .summary-grid { grid-template-columns: 1fr; } }
+    .summary-card {
+      background: #27272a;
+      border-radius: 8px;
+      padding: 1rem;
+    }
+    .summary-card h3 {
+      font-size: 0.95rem;
+      margin: 0 0 0.5rem 0;
+      color: #6366f1;
+    }
+    .summary-card .domain { font-weight: 600; margin-bottom: 0.5rem; word-break: break-all; }
+    .summary-card .count { color: #a1a1aa; font-size: 0.9rem; margin-bottom: 0.75rem; }
+    .keywords-used { color: #a1a1aa; font-size: 0.9rem; margin: 0; }
+    .loading { color: #71717a; }
+  </style>
+</head>
+<body>
+  <h1>Competitor Comparison</h1>
+  <p class="subtitle">Compare two domains by keyword rankings. Keywords are derived from your search query.</p>
+
+  <form class="form" id="form">
+    <div class="field">
+      <label for="domain1">Domain 1</label>
+      <input id="domain1" name="domain1" type="text" placeholder="e.g. semrush.com" required />
+    </div>
+    <div class="field">
+      <label for="domain2">Domain 2</label>
+      <input id="domain2" name="domain2" type="text" placeholder="e.g. ahrefs.com" required />
+    </div>
+    <div class="field">
+      <label for="query">Search query (for keywords)</label>
+      <input id="query" name="query" type="text" placeholder="e.g. best seo tools" required />
+    </div>
+    <button type="submit" id="btn">Compare</button>
+  </form>
+
+  <div class="error" id="error" style="display: none;"></div>
+  <div class="results" id="results">
+    <section id="keywords-used-section" style="display: none;">
+      <h2>Keywords used (from your query)</h2>
+      <p class="keywords-used" id="keywords-used"></p>
+    </section>
+    <section>
+      <h2>Keyword comparison</h2>
+      <table id="table">
+        <thead>
+          <tr>
+            <th>Keyword</th>
+            <th class="pos" id="th1">Domain 1</th>
+            <th class="pos" id="th2">Domain 2</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Ranking comparison (lower = better)</h2>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </section>
+    <section>
+      <h2>Summary</h2>
+      <div class="summary-grid">
+        <div class="summary-card" id="card1"></div>
+        <div class="summary-card" id="card2"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const btn = document.getElementById('btn');
+    const errorEl = document.getElementById('error');
+    const resultsEl = document.getElementById('results');
+    const tbody = document.getElementById('tbody');
+    const th1 = document.getElementById('th1');
+    const th2 = document.getElementById('th2');
+    const card1 = document.getElementById('card1');
+    const card2 = document.getElementById('card2');
+    let chartInstance = null;
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const domain1 = document.getElementById('domain1').value.trim();
+      const domain2 = document.getElementById('domain2').value.trim();
+      const query = document.getElementById('query').value.trim();
+      if (!domain1 || !domain2 || !query) return;
+
+      errorEl.style.display = 'none';
+      resultsEl.classList.remove('visible');
+      btn.disabled = true;
+      btn.textContent = 'Comparing…';
+
+      try {
+        const res = await fetch('/api/competitor/compare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain1, domain2, query })
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          throw new Error(data.error || `Request failed (${res.status})`);
+        }
+
+        render(data, domain1, domain2);
+        resultsEl.classList.add('visible');
+      } catch (err) {
+        errorEl.textContent = err.message || 'Something went wrong.';
+        errorEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Compare';
+      }
+    });
+
+    function render(data, domain1Label, domain2Label) {
+      const { keywords_used, keyword_comparison, graph_data, summary } = data;
+      const d1 = summary?.domain1?.domain || domain1Label;
+      const d2 = summary?.domain2?.domain || domain2Label;
+
+      const keywordsUsedSection = document.getElementById('keywords-used-section');
+      const keywordsUsedEl = document.getElementById('keywords-used');
+      if (keywords_used && keywords_used.length) {
+        keywordsUsedEl.textContent = keywords_used.join(' · ');
+        keywordsUsedSection.style.display = 'block';
+      } else {
+        keywordsUsedSection.style.display = 'none';
+      }
+
+      th1.textContent = d1;
+      th2.textContent = d2;
+
+      tbody.innerHTML = keyword_comparison.map(row => `
+        <tr>
+          <td>${escapeHtml(row.keyword)}</td>
+          <td class="pos ${row.company1_position == null ? 'missing' : ''}">${row.company1_position ?? '—'}</td>
+          <td class="pos ${row.company2_position == null ? 'missing' : ''}">${row.company2_position ?? '—'}</td>
+        </tr>
+      `).join('');
+
+      if (chartInstance) chartInstance.destroy();
+      const ctx = document.getElementById('chart').getContext('2d');
+      const labels = graph_data.labels || [];
+      chartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [
+            { label: d1, data: graph_data.company1 || [], backgroundColor: 'rgba(99, 102, 241, 0.8)', borderColor: '#6366f1', borderWidth: 1 },
+            { label: d2, data: graph_data.company2 || [], backgroundColor: 'rgba(34, 197, 94, 0.8)', borderColor: '#22c55e', borderWidth: 1 }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: 'Position' } }
+          },
+          plugins: { legend: { position: 'top' } }
+        }
+      });
+
+      card1.innerHTML = `
+        <h3>Domain 1</h3>
+        <div class="domain">${escapeHtml(d1)}</div>
+        <div class="count">Indexed pages: ${formatNum(summary?.domain1?.indexed_pages)}</div>
+      `;
+      card2.innerHTML = `
+        <h3>Domain 2</h3>
+        <div class="domain">${escapeHtml(d2)}</div>
+        <div class="count">Indexed pages: ${formatNum(summary?.domain2?.indexed_pages)}</div>
+      `;
+    }
+
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+    function escapeAttr(s) {
+      if (s == null) return '#';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML.replace(/"/g, '&quot;');
+    }
+    function formatNum(n) {
+      if (n == null) return '—';
+      return Number(n).toLocaleString();
+    }
+  </script>
+</body>
+</html>

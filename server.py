@@ -12,21 +12,26 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 import textstat
 from google import genai as newgenai
+from google.genai import types as genai_types
 
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SERP_API_KEY = os.getenv("SERPAPI_KEY", "4f217e661e2152844acd05cf7f500032d061f8af759968b4f36bc9e278b5d5cb")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyA5j9ZkjKW50P7QVuT1zxiWdaGRgun4FpQ")
-GEMINI_NEW_KEY = os.getenv("GEMINI_NEW_KEY", "AIzaSyBfSt2d4jlrAWFvPSPIndKTugZD56dX-ec")
+GEMINI_NEW_KEY = os.getenv("GEMINI_NEW_KEY")
 
 client_new = newgenai.Client(api_key=GEMINI_NEW_KEY) if GEMINI_NEW_KEY else None
 # For AI Visibility we use the same client (gemini-2.5-flash)
 client_visibility = newgenai.Client(api_key=os.getenv("GEMINI_API_KEY") or GEMINI_NEW_KEY) if (os.getenv("GEMINI_API_KEY") or GEMINI_NEW_KEY) else None
 
+# Gemini client for chatbot (prefer GEMINI_API_KEY, fallback to GEMINI_NEW_KEY)
+_chatbot_api_key = os.getenv("GEMINI_API_KEY") or GEMINI_NEW_KEY
+client_chatbot = newgenai.Client(api_key=_chatbot_api_key) if _chatbot_api_key else None
+
 app = Flask(__name__)
 # Allow all origins in dev so browser always gets CORS headers (fixes "Failed to fetch")
-CORS(app, origins=["*"], allow_headers=["Content-Type"], methods=["GET", "POST", "OPTIONS"])
+CORS(app, origins=["*"], allow_headers=["Content-Type", "Authorization"], methods=["GET", "POST", "OPTIONS"], supports_credentials=False)
 
 
 @app.after_request
@@ -34,8 +39,179 @@ def add_cors_headers(response):
     """Ensure CORS is on every response so browser never blocks."""
     response.headers["Access-Control-Allow-Origin"] = request.headers.get("Origin", "*")
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
+
+
+# ============ Chatbot: Gemini function declarations ============
+def _schema_obj(properties, required=None):
+    """Build a Schema for type=object with given properties and required list."""
+    return genai_types.Schema(type=genai_types.Type.OBJECT, properties=properties, required=required or [])
+
+
+CHATBOT_FUNCTION_DECLARATIONS = [
+    genai_types.FunctionDeclaration(
+        name="ai_visibility_analyze",
+        description="Analyze AI visibility: how visible a brand is for a keyword in Google search and in AI answers. Use when the user asks about brand visibility, AI visibility, or ranking for a keyword.",
+        parameters=_schema_obj(
+            {"brand_name": genai_types.Schema(type=genai_types.Type.STRING, description="Brand or company name"),
+             "keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Search keyword")},
+            ["brand_name", "keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="ppc_ads",
+        description="Get PPC/product ads for a keyword. Use when the user asks about ads, paid results, or product ads for a keyword.",
+        parameters=_schema_obj(
+            {"keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Search keyword")},
+            ["keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="ppc_calculator",
+        description="Estimate PPC campaign metrics: clicks, conversions, revenue, profit. Use when the user asks for PPC ROI, budget calculation, or campaign estimates.",
+        parameters=_schema_obj(
+            {
+                "cpc": genai_types.Schema(type=genai_types.Type.NUMBER, description="Cost per click in currency"),
+                "daily_budget": genai_types.Schema(type=genai_types.Type.NUMBER, description="Daily budget in currency"),
+                "conversion_rate": genai_types.Schema(type=genai_types.Type.NUMBER, description="Conversion rate as percentage (e.g. 2 for 2%)"),
+                "avg_order_value": genai_types.Schema(type=genai_types.Type.NUMBER, description="Average order value in currency"),
+            },
+            ["cpc", "daily_budget", "conversion_rate", "avg_order_value"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="keyword_research_analyze",
+        description="Get related keywords and difficulty for a seed keyword. Use when the user asks for keyword ideas, related keywords, or keyword research.",
+        parameters=_schema_obj(
+            {"keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Seed keyword")},
+            ["keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="competitor_analyze",
+        description="Analyze a competitor domain: ranking keywords, indexed pages, top content. Use when the user asks about a competitor site or domain analysis.",
+        parameters=_schema_obj(
+            {"domain": genai_types.Schema(type=genai_types.Type.STRING, description="Competitor domain (e.g. example.com)")},
+            ["domain"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="content_topic_research",
+        description="Get related searches and people-also-ask questions for a topic. Use for content ideas or topic research.",
+        parameters=_schema_obj(
+            {"keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Topic or keyword")},
+            ["keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="content_seo_analysis",
+        description="Analyze text for SEO: word count, keyword count, density, readability. Use when the user wants to check content for a keyword.",
+        parameters=_schema_obj(
+            {
+                "keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Target keyword"),
+                "text": genai_types.Schema(type=genai_types.Type.STRING, description="Content text to analyze"),
+            },
+            ["keyword", "text"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="content_ai_suggestions",
+        description="Get AI-generated SEO suggestions for a topic: title, meta description, outline, long-tail keywords. Use when the user wants content or SEO suggestions for a topic.",
+        parameters=_schema_obj(
+            {"keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Topic or keyword")},
+            ["keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="local_seo_business",
+        description="Look up a local business by name and location. Use when the user asks about a business listing or local SEO for a business.",
+        parameters=_schema_obj(
+            {
+                "business_name": genai_types.Schema(type=genai_types.Type.STRING, description="Business name"),
+                "location": genai_types.Schema(type=genai_types.Type.STRING, description="City or area"),
+            },
+            ["business_name", "location"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="advanced_site_audit",
+        description="Quick site audit: page title and meta description for a URL. Use when the user asks to audit a website or check title/meta.",
+        parameters=_schema_obj(
+            {"url": genai_types.Schema(type=genai_types.Type.STRING, description="Page URL")},
+            ["url"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="advanced_onpage",
+        description="Count how many times a keyword appears on a page. Use for on-page keyword check.",
+        parameters=_schema_obj(
+            {
+                "url": genai_types.Schema(type=genai_types.Type.STRING, description="Page URL"),
+                "keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Keyword to count"),
+            },
+            ["url", "keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="advanced_position",
+        description="Find Google search position of a domain for a keyword. Use when the user asks where a site ranks for a keyword.",
+        parameters=_schema_obj(
+            {
+                "domain": genai_types.Schema(type=genai_types.Type.STRING, description="Domain (e.g. example.com)"),
+                "keyword": genai_types.Schema(type=genai_types.Type.STRING, description="Search keyword"),
+            },
+            ["domain", "keyword"],
+        ),
+    ),
+    genai_types.FunctionDeclaration(
+        name="advanced_backlinks",
+        description="Estimate backlinks/mentions for a domain. Use when the user asks about backlinks or mentions.",
+        parameters=_schema_obj(
+            {"domain": genai_types.Schema(type=genai_types.Type.STRING, description="Domain to check")},
+            ["domain"],
+        ),
+    ),
+]
+
+CHATBOT_TOOL = genai_types.Tool(function_declarations=CHATBOT_FUNCTION_DECLARATIONS)
+
+# Map function name -> (method, path, body_keys for JSON)
+_CHATBOT_API_MAP = {
+    "ai_visibility_analyze": ("POST", "/api/ai-visibility/analyze", ["brand_name", "keyword"]),
+    "ppc_ads": ("POST", "/api/ppc/ads", ["keyword"]),
+    "ppc_calculator": ("POST", "/api/ppc/calculator", ["cpc", "daily_budget", "conversion_rate", "avg_order_value"]),
+    "keyword_research_analyze": ("POST", "/api/keyword-research/analyze", ["keyword"]),
+    "competitor_analyze": ("POST", "/api/competitor/analyze", ["domain"]),
+    "content_topic_research": ("POST", "/api/content/topic-research", ["keyword"]),
+    "content_seo_analysis": ("POST", "/api/content/seo-analysis", ["keyword", "text"]),
+    "content_ai_suggestions": ("POST", "/api/content/ai-suggestions", ["keyword"]),
+    "local_seo_business": ("POST", "/api/local-seo/business", ["business_name", "location"]),
+    "advanced_site_audit": ("POST", "/api/advanced/site-audit", ["url"]),
+    "advanced_onpage": ("POST", "/api/advanced/onpage", ["url", "keyword"]),
+    "advanced_position": ("POST", "/api/advanced/position", ["domain", "keyword"]),
+    "advanced_backlinks": ("POST", "/api/advanced/backlinks", ["domain"]),
+}
+
+
+def _execute_chatbot_function(name, args):
+    """Execute a chatbot function by calling the corresponding API via test client. Returns dict with result or error."""
+    if name not in _CHATBOT_API_MAP:
+        return {"error": f"Unknown function: {name}"}
+    method, path, body_keys = _CHATBOT_API_MAP[name]
+    body = {k: args.get(k) for k in body_keys if k in args}
+    with app.test_client() as c:
+        if method == "POST":
+            r = c.post(path, json=body)
+        else:
+            r = c.get(path)
+    try:
+        data = r.get_json()
+    except Exception:
+        data = {"raw": r.data.decode("utf-8") if r.data else ""}
+    if r.status_code >= 400:
+        return {"error": data.get("error", "Request failed"), "status_code": r.status_code, "response": data}
+    return data
 
 
 def normalize_url(url):
@@ -366,6 +542,123 @@ def advanced_backlinks():
 def health():
     return jsonify({"status": "ok"})
 
+# ============ Chatbot: Gemini with function calling ============
+
+@app.route("/api/chatbot", methods=["POST"])
+def chatbot():
+    """
+    Smart SEO chatbot.
+    - Uses API tools when required
+    - Uses Gemini knowledge when no tool is needed
+    - Calls tools automatically
+    """
+
+    if not client_chatbot:
+        return jsonify({"error": "GEMINI_API_KEY not set"}), 503
+
+    data = request.get_json() or {}
+    message = (data.get("message") or data.get("query") or "").strip()
+
+    if not message:
+        return jsonify({"error": "message required"}), 400
+
+    system_prompt = """
+You are an expert SEO assistant for a Mini Semrush toolkit.
+
+You have access to several tools that can fetch real SEO data.
+
+IMPORTANT RULES:
+
+1. If the user's question can be answered using a tool, CALL the tool.
+2. If the user asks something general (SEO advice, marketing tips, explanations), answer normally using your own knowledge.
+3. If a tool requires parameters and the user didn't provide them, ask the user for them.
+4. After calling a tool and receiving results, summarize them clearly for the user.
+5. Always respond in a helpful SEO expert tone.
+"""
+
+    conversation = [
+        genai_types.Content(
+            role="user",
+            parts=[genai_types.Part(text=message)]
+        )
+    ]
+
+    config = genai_types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=[CHATBOT_TOOL]
+    )
+
+    MAX_ITERATIONS = 6
+
+    for _ in range(MAX_ITERATIONS):
+
+        response = client_chatbot.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=conversation,
+            config=config
+        )
+
+        if not response.candidates:
+            return jsonify({"reply": "Sorry, I couldn't process that."})
+
+        candidate = response.candidates[0]
+
+        if not candidate.content:
+            return jsonify({"reply": "No response from AI."})
+
+        parts = candidate.content.parts
+
+        text_response = ""
+        function_calls = []
+
+        for p in parts:
+
+            if getattr(p, "text", None):
+                text_response += p.text
+
+            if getattr(p, "function_call", None):
+                function_calls.append(p.function_call)
+
+        # If no tool call -> return normal AI response
+        if not function_calls:
+            return jsonify({"reply": text_response.strip()})
+
+        # Add model tool request to conversation
+        conversation.append(
+            genai_types.Content(
+                role="model",
+                parts=parts
+            )
+        )
+
+        # Execute tool calls
+        for call in function_calls:
+
+            function_name = call.name
+            args = call.args or {}
+
+            result = _execute_chatbot_function(function_name, args)
+
+            conversation.append(
+                genai_types.Content(
+                    role="user",
+                    parts=[
+                        genai_types.Part(
+                            function_response=genai_types.FunctionResponse(
+                                name=function_name,
+                                response=result
+                            )
+                        )
+                    ]
+                )
+            )
+
+    return jsonify({
+        "reply": "I couldn't complete the request but here's what I found."
+    })
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001, debug=True)
+    # use_reloader=False avoids restarts when files in venv change (e.g. google.genai),
+    # which can cause clients to see "Cannot reach the API" during restart.
+    app.run(host="0.0.0.0", port=5001, debug=True, use_reloader=False)
